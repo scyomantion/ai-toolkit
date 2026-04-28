@@ -2064,6 +2064,10 @@ class SDTrainer(BaseSDTrainProcess):
                     # DeepSpeed asserts loss.ndim == 0; loss may arrive as shape [1].
                     if loss.ndim > 0:
                         loss = loss.mean()
+                    # Diagnostic for DeepSpeed loss assertion failures
+                    print(f"[loss diag] shape={tuple(loss.shape)}, ndim={loss.ndim}, "
+                          f"requires_grad={loss.requires_grad}, grad_fn={loss.grad_fn}, "
+                          f"dtype={loss.dtype}, value={loss.item() if loss.numel() == 1 else 'N/A'}")
                     # IMPORTANT if gradient checkpointing do not leave with network when doing backward
                     # it will destroy the gradients. This is because the network is a context manager
                     # and will change the multipliers back to 0.0 when exiting. They will be
