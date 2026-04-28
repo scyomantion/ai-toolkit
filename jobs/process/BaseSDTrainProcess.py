@@ -799,6 +799,13 @@ class BaseSDTrainProcess(BaseTrainProcess):
             if primary is None:
                 raise RuntimeError("No trainable module found to prepare with DeepSpeed.")
 
+            # Re-enable requires_grad on the trainable params. The dataloader
+            # caching steps that ran between optimizer creation and here can
+            # disable grad while moving modules around. Non-DeepSpeed path
+            # re-enables it AFTER hook_before_train_loop; for DeepSpeed we
+            # need it BEFORE prepare() so DeepSpeed sees trainable params.
+            self.ensure_params_requires_grad(force=True)
+
             # Cast trainable to bf16/fp16 BEFORE prepare(). DeepSpeed ZeRO-1/2
             # builds bit16_groups by filtering optimizer params for bf16/fp16
             # dtype; if params arrive as fp32, those groups are empty and
