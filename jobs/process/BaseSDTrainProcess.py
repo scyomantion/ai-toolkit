@@ -819,6 +819,27 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 for b in primary.buffers():
                     b.data = b.data.to(ds_dtype) if b.dtype.is_floating_point else b.data
 
+            # Diagnostic: report what's actually going to DeepSpeed
+            print(f"[DeepSpeed prep] primary type={type(primary).__name__}, "
+                  f"total params={sum(p.numel() for p in primary.parameters())}, "
+                  f"trainable params={sum(p.numel() for p in primary.parameters() if p.requires_grad)}")
+            for gi, group in enumerate(self.optimizer.param_groups):
+                ps = group.get('params', [])
+                trainable = [p for p in ps if p.requires_grad]
+                dtypes = {str(p.dtype) for p in ps}
+                print(f"[DeepSpeed prep] optimizer group {gi}: "
+                      f"len={len(ps)}, trainable={len(trainable)}, dtypes={dtypes}, lr={group.get('lr')}")
+
+            # Drop empty optimizer groups — DeepSpeed Stage1And2 indexes into
+            # bit16_groups[i][0] and crashes with IndexError on empty groups.
+            non_empty_groups = [
+                g for g in self.optimizer.param_groups
+                if any(p.requires_grad for p in g.get('params', []))
+            ]
+            if len(non_empty_groups) != len(self.optimizer.param_groups):
+                print(f"[DeepSpeed prep] dropping {len(self.optimizer.param_groups) - len(non_empty_groups)} empty optimizer group(s)")
+                self.optimizer.param_groups = non_empty_groups
+
             primary, self.optimizer, self.lr_scheduler = self.accelerator.prepare(
                 primary, self.optimizer, self.lr_scheduler
             )
