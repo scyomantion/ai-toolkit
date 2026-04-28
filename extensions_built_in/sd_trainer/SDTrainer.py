@@ -2061,6 +2061,9 @@ class SDTrainer(BaseSDTrainProcess):
                 with self.timer('backward'):
                     # todo we have multiplier seperated. works for now as res are not in same batch, but need to change
                     loss = loss * loss_multiplier.mean()
+                    # DeepSpeed asserts loss.ndim == 0; loss may arrive as shape [1].
+                    if loss.ndim > 0:
+                        loss = loss.mean()
                     # IMPORTANT if gradient checkpointing do not leave with network when doing backward
                     # it will destroy the gradients. This is because the network is a context manager
                     # and will change the multipliers back to 0.0 when exiting. They will be
