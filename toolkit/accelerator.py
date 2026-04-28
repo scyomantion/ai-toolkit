@@ -51,7 +51,12 @@ def get_accelerator(multi_gpu_mode: str = 'none', **kwargs) -> Accelerator:
             offload_param_device='none',
         )
         if zero_stage == 3:
-            deepspeed_plugin_kwargs['zero3_init_flag'] = True
+            # zero3_init_flag=True wraps EVERY from_pretrained call after this
+            # point under DeepSpeed.zero.Init, partitioning the params. That
+            # silently shards frozen models too (text encoder, VAE), causing
+            # downstream "weight must be 2-D" on embedding lookups. Keep False
+            # so only the model passed to accelerator.prepare() is sharded.
+            deepspeed_plugin_kwargs['zero3_init_flag'] = False
             deepspeed_plugin_kwargs['zero3_save_16bit_model'] = True
         deepspeed_plugin = DeepSpeedPlugin(**deepspeed_plugin_kwargs)
         accelerator_kwargs['deepspeed_plugin'] = deepspeed_plugin
