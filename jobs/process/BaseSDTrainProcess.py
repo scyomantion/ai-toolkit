@@ -803,13 +803,21 @@ class BaseSDTrainProcess(BaseTrainProcess):
             # builds bit16_groups by filtering optimizer params for bf16/fp16
             # dtype; if params arrive as fp32, those groups are empty and
             # Stage1And2ZeroOptimizer crashes with IndexError.
+            #
+            # IMPORTANT: cast in-place via param.data.to(...). Calling
+            # module.to(dtype) would REPLACE the nn.Parameter objects, leaving
+            # the already-constructed optimizer pointing at the original fp32
+            # Parameters.
             ds_dtype = None
             if self.train_config.dtype in ('bf16', 'bfloat16'):
                 ds_dtype = torch.bfloat16
             elif self.train_config.dtype in ('fp16', 'float16'):
                 ds_dtype = torch.float16
             if ds_dtype is not None:
-                primary = primary.to(ds_dtype)
+                for p in primary.parameters():
+                    p.data = p.data.to(ds_dtype)
+                for b in primary.buffers():
+                    b.data = b.data.to(ds_dtype) if b.dtype.is_floating_point else b.data
 
             primary, self.optimizer, self.lr_scheduler = self.accelerator.prepare(
                 primary, self.optimizer, self.lr_scheduler
