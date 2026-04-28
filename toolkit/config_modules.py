@@ -578,6 +578,11 @@ class TrainConfig:
         
         self.audio_loss_multiplier = kwargs.get("audio_loss_multiplier", 1.0)
 
+        # multi GPU training
+        self.multi_gpu_mode: str = kwargs.get('multi_gpu_mode', 'none')  # "none", "ddp", "deepspeed"
+        self.deepspeed_zero_stage: int = kwargs.get('deepspeed_zero_stage', 2)  # 2 or 3
+        self.num_processes: int = kwargs.get('num_processes', None)  # None = auto-detect
+
 
 ModelArch = Literal['sd1', 'sd2', 'sd3', 'sdxl', 'pixart', 'pixart_sigma', 'auraflow', 'flux', 'flex1', 'flex2', 'lumina2', 'vega', 'ssd', 'wan21']
 
@@ -1389,5 +1394,16 @@ def validate_configs(
     
     if train_config.batch_size > 1 and any(dataset_config.auto_frame_count for dataset_config in dataset_configs):
         raise ValueError("Cannot use batch size greater than 1 with auto_frame_count. Please set batch_size to 1 or auto_frame_count to False.")
+
+    # multi GPU validation
+    if train_config.multi_gpu_mode not in ('none', 'ddp', 'deepspeed'):
+        raise ValueError(f"multi_gpu_mode must be 'none', 'ddp', or 'deepspeed', got '{train_config.multi_gpu_mode}'")
+    if train_config.multi_gpu_mode == 'deepspeed':
+        if train_config.deepspeed_zero_stage not in (2, 3):
+            raise ValueError("deepspeed_zero_stage must be 2 or 3")
+    if model_config.split_model_over_gpus and train_config.multi_gpu_mode != 'none':
+        raise ValueError("split_model_over_gpus cannot be used with multi_gpu_mode. "
+                         "split_model_over_gpus is for inference-only tensor parallelism. "
+                         "Use multi_gpu_mode for training across GPUs.")
 
     

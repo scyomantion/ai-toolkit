@@ -78,7 +78,41 @@ class BaseSDTrainProcess(BaseTrainProcess):
 
     def __init__(self, process_id: int, job, config: OrderedDict, custom_pipeline=None):
         super().__init__(process_id, job, config)
-        self.accelerator: Accelerator = get_accelerator()
+
+        # Load train config early to configure the accelerator
+        raw_train_config = self.get_conf('train', {})
+        multi_gpu_mode = raw_train_config.get('multi_gpu_mode', 'none')
+        deepspeed_zero_stage = raw_train_config.get('deepspeed_zero_stage', 2)
+        num_processes = raw_train_config.get('num_processes', None)
+        # Match TrainConfig precedence: gradient_accumulation_steps wins if explicitly set
+        gradient_accumulation_steps = raw_train_config.get('gradient_accumulation_steps', 1)
+        gradient_accumulation_legacy = raw_train_config.get('gradient_accumulation', 1)
+        gradient_accumulation = (
+            gradient_accumulation_steps if gradient_accumulation_steps != 1
+            else gradient_accumulation_legacy
+        )
+        max_grad_norm = raw_train_config.get('max_grad_norm', 1.0)
+        train_micro_batch_size_per_gpu = raw_train_config.get('batch_size', 1)
+
+        # Map dtype to mixed_precision string
+        raw_dtype = raw_train_config.get('dtype', 'fp32')
+        if raw_dtype in ('fp16', 'float16'):
+            mixed_precision = 'fp16'
+        elif raw_dtype in ('bfloat16', 'bf16'):
+            mixed_precision = 'bf16'
+        else:
+            mixed_precision = 'no'
+
+        self.accelerator: Accelerator = get_accelerator(
+            multi_gpu_mode=multi_gpu_mode,
+            deepspeed_zero_stage=deepspeed_zero_stage,
+            num_processes=num_processes,
+            gradient_accumulation_steps=gradient_accumulation,
+            gradient_clipping=max_grad_norm,
+            mixed_precision=mixed_precision,
+            train_micro_batch_size_per_gpu=train_micro_batch_size_per_gpu,
+        )
+
         if self.accelerator.is_local_main_process:
             transformers.utils.logging.set_verbosity_warning()
             diffusers.utils.logging.set_verbosity_error()
@@ -721,40 +755,90 @@ class BaseSDTrainProcess(BaseTrainProcess):
     def prepare_accelerator(self):
         # set some config
         self.accelerator.even_batches=False
-        
-        # # prepare all the models stuff for accelerator (hopefully we dont miss any)
-        self.sd.vae = self.accelerator.prepare(self.sd.vae)
-        if self.sd.unet is not None:
-            self.sd.unet = self.accelerator.prepare(self.sd.unet)
-            # todo always tdo it?
-            self.modules_being_trained.append(self.sd.unet)
-        if self.sd.text_encoder is not None and self.train_config.train_text_encoder:
-            if isinstance(self.sd.text_encoder, list):
-                self.sd.text_encoder = [self.accelerator.prepare(model) for model in self.sd.text_encoder]
-                self.modules_being_trained.extend(self.sd.text_encoder)
+
+        # Under DeepSpeed, prepare() must be called ONCE with the trainable model
+        # + optimizer + lr_scheduler together (or DeepSpeed errors with
+        # "zero stage N requires an optimizer"). Frozen modules (VAE, frozen TE)
+        # must NOT go through prepare() — they'd be wrapped as trainables.
+        is_deepspeed = (
+            getattr(self.accelerator.state, 'deepspeed_plugin', None) is not None
+        )
+
+        if is_deepspeed:
+            trainables = []
+            train_te = self.train_config.train_text_encoder
+            train_refiner = self.train_config.train_refiner
+
+            # Collect the single primary trainable module for the combined prepare().
+            # Multi-module training (e.g. unet + text encoder) under DeepSpeed needs
+            # special handling not yet supported — assert here so users know.
+            primary = None
+            if self.sd.network is not None:
+                primary = self.sd.network
+            elif self.adapter is not None and self.adapter_config.train:
+                primary = self.adapter
+            elif self.sd.unet is not None:
+                primary = self.sd.unet
+
+            extra_trainables = []
+            if train_te and self.sd.text_encoder is not None:
+                if isinstance(self.sd.text_encoder, list):
+                    extra_trainables.extend(self.sd.text_encoder)
+                else:
+                    extra_trainables.append(self.sd.text_encoder)
+            if train_refiner and self.sd.refiner_unet is not None:
+                extra_trainables.append(self.sd.refiner_unet)
+
+            if extra_trainables:
+                raise NotImplementedError(
+                    "DeepSpeed mode currently supports a single trainable module "
+                    "(unet OR network OR adapter). Joint training of unet + text "
+                    "encoder / refiner under DeepSpeed is not wired up yet."
+                )
+
+            if primary is None:
+                raise RuntimeError("No trainable module found to prepare with DeepSpeed.")
+
+            primary, self.optimizer, self.lr_scheduler = self.accelerator.prepare(
+                primary, self.optimizer, self.lr_scheduler
+            )
+
+            # Write back the prepared module to its original slot
+            if self.sd.network is not None:
+                self.sd.network = primary
+            elif self.adapter is not None and self.adapter_config.train:
+                self.adapter = primary
             else:
-                self.sd.text_encoder = self.accelerator.prepare(self.sd.text_encoder)
-                self.modules_being_trained.append(self.sd.text_encoder)
-        if self.sd.refiner_unet is not None and self.train_config.train_refiner:
-            self.sd.refiner_unet = self.accelerator.prepare(self.sd.refiner_unet)
-            self.modules_being_trained.append(self.sd.refiner_unet)
-        # todo, do we need to do the network or will "unet" get it?
-        if self.sd.network is not None:
-            self.sd.network = self.accelerator.prepare(self.sd.network)
-            self.modules_being_trained.append(self.sd.network)
-        if self.adapter is not None and self.adapter_config.train:
-            # todo adapters may not be a module. need to check
-            self.adapter = self.accelerator.prepare(self.adapter)
-            self.modules_being_trained.append(self.adapter)
-        
-        # prepare other things
-        self.optimizer = self.accelerator.prepare(self.optimizer)
-        if self.lr_scheduler is not None:
-            self.lr_scheduler = self.accelerator.prepare(self.lr_scheduler)
-        # self.data_loader = self.accelerator.prepare(self.data_loader)
-        # if self.data_loader_reg is not None:
-        #     self.data_loader_reg = self.accelerator.prepare(self.data_loader_reg)
-            
+                self.sd.unet = primary
+            self.modules_being_trained.append(primary)
+
+        else:
+            # Original (non-DeepSpeed) path: DDP / single-GPU
+            self.sd.vae = self.accelerator.prepare(self.sd.vae)
+            if self.sd.unet is not None:
+                self.sd.unet = self.accelerator.prepare(self.sd.unet)
+                self.modules_being_trained.append(self.sd.unet)
+            if self.sd.text_encoder is not None and self.train_config.train_text_encoder:
+                if isinstance(self.sd.text_encoder, list):
+                    self.sd.text_encoder = [self.accelerator.prepare(model) for model in self.sd.text_encoder]
+                    self.modules_being_trained.extend(self.sd.text_encoder)
+                else:
+                    self.sd.text_encoder = self.accelerator.prepare(self.sd.text_encoder)
+                    self.modules_being_trained.append(self.sd.text_encoder)
+            if self.sd.refiner_unet is not None and self.train_config.train_refiner:
+                self.sd.refiner_unet = self.accelerator.prepare(self.sd.refiner_unet)
+                self.modules_being_trained.append(self.sd.refiner_unet)
+            if self.sd.network is not None:
+                self.sd.network = self.accelerator.prepare(self.sd.network)
+                self.modules_being_trained.append(self.sd.network)
+            if self.adapter is not None and self.adapter_config.train:
+                self.adapter = self.accelerator.prepare(self.adapter)
+                self.modules_being_trained.append(self.adapter)
+
+            self.optimizer = self.accelerator.prepare(self.optimizer)
+            if self.lr_scheduler is not None:
+                self.lr_scheduler = self.accelerator.prepare(self.lr_scheduler)
+
 
     def ensure_params_requires_grad(self, force=False):
         if self.train_config.do_paramiter_swapping and not force:

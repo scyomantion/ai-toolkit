@@ -39,11 +39,15 @@ from toolkit.job import get_job
 from toolkit.accelerator import get_accelerator
 from toolkit.print import print_acc, setup_log_to_file
 
-accelerator = get_accelerator()
+def _is_main_process():
+    # Use env vars set by accelerate/torch.distributed launcher; avoids creating
+    # the Accelerator singleton too early (which would freeze it without the
+    # train-config-driven DeepSpeed plugin).
+    return int(os.environ.get("RANK", "0")) == 0
 
 
 def print_end_message(jobs_completed, jobs_failed):
-    if not accelerator.is_main_process:
+    if not _is_main_process():
         return
     failure_string = f"{jobs_failed} failure{'' if jobs_failed == 1 else 's'}" if jobs_failed > 0 else ""
     completed_string = f"{jobs_completed} completed job{'' if jobs_completed == 1 else 's'}"
@@ -102,8 +106,11 @@ def main():
     jobs_completed = 0
     jobs_failed = 0
 
-    if accelerator.is_main_process:
-        print_acc(f"Running {len(config_file_list)} job{'' if len(config_file_list) == 1 else 's'}")
+    if _is_main_process():
+        # Use plain print here, NOT print_acc — print_acc would create the
+        # Accelerator singleton before BaseSDTrainProcess.__init__ has a chance
+        # to attach the DeepSpeed plugin built from the train config.
+        print(f"Running {len(config_file_list)} job{'' if len(config_file_list) == 1 else 's'}")
 
     for config_file in config_file_list:
         try:
