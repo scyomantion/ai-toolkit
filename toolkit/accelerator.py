@@ -85,6 +85,18 @@ def get_accelerator(multi_gpu_mode: str = 'none', **kwargs) -> Accelerator:
     # accelerator.prepare() can be called on individual modules without a dataloader.
     # Must be done AFTER Accelerator() since it rebuilds deepspeed_config on the plugin.
     if multi_gpu_mode == 'deepspeed':
+        # transformers' from_pretrained() auto-partitions every model loaded
+        # while a global HfDeepSpeedConfig is registered (ZeRO-3 detection via
+        # is_deepspeed_zero3_enabled()). That breaks frozen text encoder /
+        # VAE loads with "weight must be 2-D" on embedding lookups. Clear the
+        # weak ref now; accelerator.prepare() re-establishes it on the
+        # trainable model later.
+        try:
+            import transformers.integrations.deepspeed as _t_ds
+            _t_ds._hf_deepspeed_config_weak_ref = None
+        except Exception as e:
+            print(f"WARNING: could not clear transformers HfDeepSpeedConfig weak ref: {e}")
+
         try:
             from accelerate.state import AcceleratorState
             ds_plugin = AcceleratorState().deepspeed_plugin
