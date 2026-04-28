@@ -799,6 +799,18 @@ class BaseSDTrainProcess(BaseTrainProcess):
             if primary is None:
                 raise RuntimeError("No trainable module found to prepare with DeepSpeed.")
 
+            # Cast trainable to bf16/fp16 BEFORE prepare(). DeepSpeed ZeRO-1/2
+            # builds bit16_groups by filtering optimizer params for bf16/fp16
+            # dtype; if params arrive as fp32, those groups are empty and
+            # Stage1And2ZeroOptimizer crashes with IndexError.
+            ds_dtype = None
+            if self.train_config.dtype in ('bf16', 'bfloat16'):
+                ds_dtype = torch.bfloat16
+            elif self.train_config.dtype in ('fp16', 'float16'):
+                ds_dtype = torch.float16
+            if ds_dtype is not None:
+                primary = primary.to(ds_dtype)
+
             primary, self.optimizer, self.lr_scheduler = self.accelerator.prepare(
                 primary, self.optimizer, self.lr_scheduler
             )

@@ -87,6 +87,15 @@ def get_accelerator(multi_gpu_mode: str = 'none', **kwargs) -> Accelerator:
                 ds_plugin.deepspeed_config['train_micro_batch_size_per_gpu'] = (
                     kwargs.get('train_micro_batch_size_per_gpu', 1)
                 )
+                # Mirror mixed_precision into the DeepSpeed config so the engine
+                # casts params to the right dtype. Without this, ZeRO-2's
+                # bit16_groups stays empty and Stage1And2ZeroOptimizer crashes
+                # with "list index out of range".
+                mp = kwargs.get('mixed_precision', 'no')
+                if mp == 'bf16':
+                    ds_plugin.deepspeed_config['bf16'] = {'enabled': True}
+                elif mp == 'fp16':
+                    ds_plugin.deepspeed_config['fp16'] = {'enabled': True}
         except Exception as e:
             print(f"WARNING: could not set train_micro_batch_size_per_gpu on DeepSpeed plugin: {e}")
 
