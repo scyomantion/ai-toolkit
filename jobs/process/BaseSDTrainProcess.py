@@ -855,6 +855,14 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 primary, self.optimizer, self.lr_scheduler
             )
 
+            # Under ZeRO-3, prepare() can replace the underlying Parameter
+            # objects with sharded copies that default to requires_grad=False.
+            # Re-enable grad on the post-prepare module so autograd tracks
+            # through the forward pass.
+            unwrapped = self.accelerator.unwrap_model(primary) if hasattr(self.accelerator, 'unwrap_model') else primary
+            for p in unwrapped.parameters():
+                p.requires_grad_(True)
+
             # Write back the prepared module to its original slot
             if self.sd.network is not None:
                 self.sd.network = primary
