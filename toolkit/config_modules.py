@@ -582,6 +582,9 @@ class TrainConfig:
         self.multi_gpu_mode: str = kwargs.get('multi_gpu_mode', 'none')  # "none", "ddp", "deepspeed"
         self.deepspeed_zero_stage: int = kwargs.get('deepspeed_zero_stage', 2)  # 2 or 3
         self.num_processes: int = kwargs.get('num_processes', None)  # None = auto-detect
+        # Offload destinations for DeepSpeed: "none" or "cpu" (or "nvme" if configured)
+        self.deepspeed_offload_optimizer: str = kwargs.get('deepspeed_offload_optimizer', 'none')
+        self.deepspeed_offload_param: str = kwargs.get('deepspeed_offload_param', 'none')
 
 
 ModelArch = Literal['sd1', 'sd2', 'sd3', 'sdxl', 'pixart', 'pixart_sigma', 'auraflow', 'flux', 'flex1', 'flex2', 'lumina2', 'vega', 'ssd', 'wan21']

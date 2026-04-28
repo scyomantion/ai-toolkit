@@ -42,13 +42,16 @@ def get_accelerator(multi_gpu_mode: str = 'none', **kwargs) -> Accelerator:
         mixed_precision = kwargs.get('mixed_precision', 'no')
         train_micro_batch_size_per_gpu = kwargs.get('train_micro_batch_size_per_gpu', 1)
 
+        offload_optimizer_device = kwargs.get('offload_optimizer_device', 'none')
+        offload_param_device = kwargs.get('offload_param_device', 'none')
+
         deepspeed_plugin_kwargs = dict(
             hf_ds_config=None,
             gradient_accumulation_steps=gradient_accumulation_steps,
             gradient_clipping=gradient_clipping,
             zero_stage=zero_stage,
-            offload_optimizer_device='none',
-            offload_param_device='none',
+            offload_optimizer_device=offload_optimizer_device,
+            offload_param_device=offload_param_device,
         )
         if zero_stage == 3:
             # zero3_init_flag=True wraps EVERY from_pretrained call after this

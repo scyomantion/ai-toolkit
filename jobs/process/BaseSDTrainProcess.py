@@ -93,6 +93,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
         )
         max_grad_norm = raw_train_config.get('max_grad_norm', 1.0)
         train_micro_batch_size_per_gpu = raw_train_config.get('batch_size', 1)
+        offload_optimizer_device = raw_train_config.get('deepspeed_offload_optimizer', 'none')
+        offload_param_device = raw_train_config.get('deepspeed_offload_param', 'none')
 
         # Map dtype to mixed_precision string
         raw_dtype = raw_train_config.get('dtype', 'fp32')
@@ -111,6 +113,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
             gradient_clipping=max_grad_norm,
             mixed_precision=mixed_precision,
             train_micro_batch_size_per_gpu=train_micro_batch_size_per_gpu,
+            offload_optimizer_device=offload_optimizer_device,
+            offload_param_device=offload_param_device,
         )
 
         if self.accelerator.is_local_main_process:
